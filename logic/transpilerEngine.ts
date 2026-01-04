@@ -1,18 +1,17 @@
 
 import { conversionService } from "../services/geminiService";
-import { ProjectFile, ProjectAnalysis, ConversionReport, Language } from "../types";
+import { ProjectFile, ProjectAnalysis, Language } from "../types";
 
 /**
- * PRODUCTION PIPELINE ENGINE (Simulated Backend)
+ * PRODUCTION PIPELINE ENGINE
  * 
- * This engine handles:
- * 1. Project Analysis (/analyze)
- * 2. Asynchronous Transpilation (/convert)
- * 3. Split/Merge Logic
- * 4. Validation & Report Generation (/validate)
+ * Handles project-level orchestration for the transpilation workspace.
  */
 
 export const analyzeProject = async (files: ProjectFile[]): Promise<ProjectAnalysis> => {
+  if (files.length === 0) {
+    throw new Error("No files provided for analysis");
+  }
   return await conversionService.analyzeProject(files);
 };
 
@@ -22,22 +21,22 @@ export const startConversionJob = async (
   targetLang: Language,
   autoSplit: boolean
 ): Promise<{ jobId: string }> => {
-  // Simulate backend job creation
-  return { jobId: `job-${Date.now()}` };
+  // In this serverless context, we treat the job ID as a timestamp-based session ID
+  const jobId = `job-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  
+  // Note: Actual conversion logic is handled in the UI loop via convertFileWithSplitting
+  // for real-time progress updates and granular error handling.
+  return { jobId };
 };
 
-// Internal mapping module example: HTML -> PHP
-export const htmlToPhpModule = {
-  detect: (file: ProjectFile) => file.name.endsWith('.html'),
-  transform: async (file: ProjectFile) => {
-    // Modular logic can be added here
-  }
-};
-
-// Internal mapping module example: Python -> Java
-export const pythonToJavaModule = {
-  detect: (file: ProjectFile) => file.name.endsWith('.py'),
-  transform: async (file: ProjectFile) => {
-    // Modular logic can be added here
+/**
+ * Utility for handling specific framework conversions like WordPress or Static HTML.
+ */
+export const frameworkAdapter = {
+  detectFramework: (files: ProjectFile[]): string | undefined => {
+    if (files.some(f => f.name === 'wp-config.php' || f.name.includes('wp-content'))) return 'WordPress';
+    if (files.some(f => f.name === 'package.json')) return 'Node.js';
+    if (files.some(f => f.name === 'pom.xml')) return 'Maven';
+    return undefined;
   }
 };
