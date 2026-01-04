@@ -1,0 +1,5 @@
+{
+  "name": "PolyGlot Code Transpiler",
+  "description": "A sophisticated modular code conversion tool that uses semantic mapping to translate logic between programming languages, featuring a clean developer-centric UI.",
+  "requestFramePermissions": []
+}
