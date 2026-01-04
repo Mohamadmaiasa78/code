@@ -11,7 +11,8 @@ import { conversionService } from './services/geminiService';
 import { 
   Code2, ArrowRightLeft, Copy, Check, AlertCircle, Play, Sparkles,
   Trash2, Terminal, Info, FolderOpen, FileCode, Files, ChevronRight,
-  Loader2, Download, Layers, ShieldCheck, FileJson, FileText, Upload
+  Loader2, Download, Layers, ShieldCheck, FileJson, FileText, Upload,
+  Folder, ChevronDown
 } from 'lucide-react';
 
 const LANGUAGES: { id: Language; label: string }[] = [
@@ -25,6 +26,15 @@ const LANGUAGES: { id: Language; label: string }[] = [
   { id: 'php', label: 'PHP' },
   { id: 'html', label: 'HTML' }
 ];
+
+// Tree node interface for folder organization
+interface FileTreeNode {
+  name: string;
+  path: string;
+  type: 'folder' | 'file';
+  children: Record<string, FileTreeNode>;
+  file?: ProjectFile;
+}
 
 const App: React.FC = () => {
   // Input Modes
@@ -40,19 +50,59 @@ const App: React.FC = () => {
   const [analysis, setAnalysis] = useState<ProjectAnalysis | null>(null);
   const [report, setReport] = useState<ConversionReport | null>(null);
   const [progress, setProgress] = useState(0);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['root']));
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const zipInputRef = useRef<HTMLInputElement>(null);
   const outputRef = useRef<HTMLDivElement>(null);
 
   const currentFile = useMemo(() => files.find(f => f.id === selectedFileId), [files, selectedFileId]);
+
+  // Build a hierarchical tree from flat files list
+  const fileTree = useMemo(() => {
+    const root: FileTreeNode = { name: 'root', path: 'root', type: 'folder', children: {} };
+    files.forEach(file => {
+      const parts = file.path.split('/');
+      let current = root;
+      let currentPath = '';
+      
+      parts.forEach((part, index) => {
+        currentPath = currentPath ? `${currentPath}/${part}` : part;
+        if (index === parts.length - 1) {
+          current.children[part] = { 
+            name: part, 
+            path: currentPath, 
+            type: 'file', 
+            children: {}, 
+            file 
+          };
+        } else {
+          if (!current.children[part]) {
+            current.children[part] = { 
+              name: part, 
+              path: currentPath, 
+              type: 'folder', 
+              children: {} 
+            };
+          }
+          current = current.children[part];
+        }
+      });
+    });
+    return root;
+  }, [files]);
+
+  const toggleFolder = (path: string) => {
+    const next = new Set(expandedFolders);
+    if (next.has(path)) next.delete(path);
+    else next.add(path);
+    setExpandedFolders(next);
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
     if (!fileList) return;
 
     const loadedFiles: ProjectFile[] = [];
-    // Fix: Cast file items from unknown to File with webkitRelativePath extension
     const readers = Array.from(fileList).map((fileItem, index) => {
       const file = fileItem as File & { webkitRelativePath?: string };
       return new Promise<void>((resolve) => {
@@ -92,12 +142,25 @@ const App: React.FC = () => {
     setInputMode('folder');
     if (loadedFiles.length > 0) setSelectedFileId(loadedFiles[0].id);
     
-    // Auto-analyze
+    // Auto-expand paths for visible files
+    const pathsToExpand = new Set(['root']);
+    loadedFiles.forEach(f => {
+      const parts = f.path.split('/');
+      let current = '';
+      parts.slice(0, -1).forEach(p => {
+        current = current ? `${current}/${p}` : p;
+        pathsToExpand.add(current);
+      });
+    });
+    setExpandedFolders(pathsToExpand);
+
     setIsProcessing(true);
     try {
       const result = await conversionService.analyzeProject(loadedFiles);
       setAnalysis(result);
       if (sourceLang === 'auto') setSourceLang(result.primaryLanguage);
+    } catch (err) {
+      console.error("Analysis failed", err);
     } finally {
       setIsProcessing(false);
     }
@@ -161,8 +224,6 @@ const App: React.FC = () => {
   };
 
   const handleDownload = () => {
-    // In a real production app, this would request a ZIP from the /download endpoint
-    // Here we simulate generating a report and a zip-like structure
     const manifest = {
       report,
       files: files.flatMap(f => f.outputFiles)
@@ -175,9 +236,59 @@ const App: React.FC = () => {
     a.click();
   };
 
+  // Recursive renderer for the file tree
+  const renderTree = (node: FileTreeNode, depth = 0) => {
+    const children = Object.values(node.children).sort((a, b) => {
+      // Folders first
+      if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    return (
+      <div key={node.path} className="flex flex-col">
+        {node.path !== 'root' && (
+          <button
+            onClick={() => node.type === 'folder' ? toggleFolder(node.path) : setSelectedFileId(node.file?.id || null)}
+            className={`w-full group flex items-center gap-1.5 px-3 py-1.5 text-left text-[11px] transition-colors border-l-2 ${
+              node.type === 'file' && selectedFileId === node.file?.id 
+                ? 'bg-[#2b2c2f] text-[#8ab4f8] border-[#8ab4f8]' 
+                : 'text-[#9aa0a6] border-transparent hover:bg-[#202124]'
+            }`}
+            style={{ paddingLeft: `${depth * 12 + 12}px` }}
+          >
+            {node.type === 'folder' ? (
+              <>
+                {expandedFolders.has(node.path) ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                <Folder className="w-3.5 h-3.5 text-[#f9ab00] opacity-80" />
+              </>
+            ) : (
+              <>
+                <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: 
+                  node.file?.status === 'completed' ? '#10b981' : 
+                  node.file?.status === 'processing' ? '#3b82f6' : 
+                  node.file?.status === 'error' ? '#f43f5e' : '#475569' 
+                }} />
+                <FileCode className="w-3.5 h-3.5 shrink-0 opacity-50 group-hover:opacity-100" />
+              </>
+            )}
+            <span className="truncate flex-1">{node.name}</span>
+            {node.file && node.file.outputFiles.length > 1 && (
+              <span className="text-[8px] bg-[#3c4043] text-white px-1 rounded">SPLIT</span>
+            )}
+          </button>
+        )}
+        
+        {(node.path === 'root' || (node.type === 'folder' && expandedFolders.has(node.path))) && (
+          <div className="flex flex-col">
+            {children.map(child => renderTree(child, depth + 1))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="flex h-screen bg-[#0f1011] text-[#e3e3e3] overflow-hidden font-sans">
-      {/* Sidebar - Control Panel */}
       <aside className="w-80 flex flex-col border-r border-[#3c4043] bg-[#1e1f20] shrink-0">
         <div className="p-4 border-b border-[#3c4043] flex items-center gap-2">
           <Code2 className="w-6 h-6 text-[#8ab4f8]" />
@@ -185,7 +296,6 @@ const App: React.FC = () => {
         </div>
         
         <div className="flex-1 overflow-y-auto p-4 space-y-6">
-          {/* Input Source */}
           <div className="space-y-3">
             <label className="block text-[10px] font-bold text-[#9aa0a6] uppercase tracking-widest">Input Source</label>
             <div className="grid grid-cols-2 gap-2 p-1 bg-[#0f1011] rounded-lg border border-[#3c4043]">
@@ -215,18 +325,12 @@ const App: React.FC = () => {
                   <FolderOpen className="w-4 h-4 text-[#8ab4f8]" />
                   Load Folder
                 </button>
-                <button className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-transparent hover:bg-[#3c4043] border border-[#3c4043] rounded-lg text-xs text-[#9aa0a6] transition-all">
-                  <Upload className="w-3 h-3" />
-                  Upload .ZIP
-                </button>
               </div>
             )}
           </div>
 
-          {/* Config */}
           <div className="space-y-4">
             <label className="block text-[10px] font-bold text-[#9aa0a6] uppercase tracking-widest">Pipeline Config</label>
-            
             <div className="space-y-2">
               <span className="text-xs text-[#9aa0a6]">Source Language</span>
               <select 
@@ -238,7 +342,6 @@ const App: React.FC = () => {
                 {LANGUAGES.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
               </select>
             </div>
-
             <div className="space-y-2">
               <span className="text-xs text-[#9aa0a6]">Target Language</span>
               <select 
@@ -249,7 +352,6 @@ const App: React.FC = () => {
                 {LANGUAGES.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
               </select>
             </div>
-
             <div className="flex items-center justify-between p-3 bg-[#2b2c2f] rounded-lg border border-[#3c4043]">
               <div className="flex items-center gap-2">
                 <Layers className="w-4 h-4 text-indigo-400" />
@@ -285,56 +387,32 @@ const App: React.FC = () => {
             {isProcessing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5 fill-current" />}
             {isProcessing ? `Processing ${progress}%` : 'Execute Migration'}
           </button>
-          
           {report && (
             <button 
               onClick={handleDownload}
               className="w-full flex items-center justify-center gap-2 py-2.5 bg-transparent hover:bg-[#3c4043] border border-[#3c4043] rounded-xl text-xs font-semibold text-[#8ab4f8] transition-all"
             >
               <Download className="w-4 h-4" />
-              Download Build Artifacts (.zip)
+              Download Build Artifacts (.json)
             </button>
           )}
         </div>
       </aside>
 
-      {/* Main Workspace */}
       <main className="flex-1 flex flex-col bg-[#0f1011] overflow-hidden">
-        {/* Workspace Body */}
         <div className="flex-1 flex overflow-hidden">
-          {/* Internal Explorer */}
           {files.length > 0 && (
             <div className="w-64 flex flex-col border-r border-[#3c4043] bg-[#1a1b1c] shrink-0">
               <div className="px-4 py-2 bg-[#202124] border-b border-[#3c4043] flex items-center justify-between">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-[#9aa0a6]">Project Files</span>
+                <span className="text-[10px] font-bold uppercase tracking-widest text-[#9aa0a6]">Project Explorer</span>
                 <span className="text-[10px] text-[#5f6368]">{files.length} items</span>
               </div>
-              <div className="flex-1 overflow-y-auto">
-                {files.map((file) => (
-                  <button
-                    key={file.id}
-                    onClick={() => setSelectedFileId(file.id)}
-                    className={`w-full group flex items-center gap-2 px-3 py-2 text-left text-xs transition-colors border-l-2 ${
-                      selectedFileId === file.id 
-                        ? 'bg-[#2b2c2f] text-[#8ab4f8] border-[#8ab4f8]' 
-                        : 'text-[#9aa0a6] border-transparent hover:bg-[#202124]'
-                    }`}
-                  >
-                    <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: 
-                      file.status === 'completed' ? '#10b981' : 
-                      file.status === 'processing' ? '#3b82f6' : 
-                      file.status === 'error' ? '#f43f5e' : '#475569' 
-                    }} />
-                    <FileCode className="w-3.5 h-3.5 shrink-0 opacity-50 group-hover:opacity-100" />
-                    <span className="truncate flex-1">{file.name}</span>
-                    {file.outputFiles.length > 1 && <span className="text-[8px] bg-[#3c4043] text-white px-1 rounded">SPLIT {file.outputFiles.length}</span>}
-                  </button>
-                ))}
+              <div className="flex-1 overflow-y-auto pt-2">
+                {renderTree(fileTree)}
               </div>
             </div>
           )}
 
-          {/* Editors Split View */}
           <div className="flex-1 flex flex-col min-w-0">
             {report && (
               <div className="p-4 bg-indigo-500/10 border-b border-indigo-500/20 flex items-center justify-between gap-4">
@@ -350,11 +428,10 @@ const App: React.FC = () => {
             )}
 
             <div className="flex-1 flex overflow-hidden">
-              {/* Source Pane */}
               <div className="flex-1 flex flex-col border-r border-[#3c4043]">
                 <div className="flex items-center gap-2 px-4 py-1.5 bg-[#202124] border-b border-[#3c4043]">
                   <Terminal className="w-3 h-3 text-[#9aa0a6]" />
-                  <span className="text-[10px] font-medium uppercase text-[#9aa0a6]">Original</span>
+                  <span className="text-[10px] font-medium uppercase text-[#9aa0a6]">Original: {currentFile?.path || 'Source'}</span>
                 </div>
                 {inputMode === 'paste' ? (
                   <textarea
@@ -381,14 +458,13 @@ const App: React.FC = () => {
                     ) : (
                       <div className="flex flex-col items-center justify-center h-full text-center opacity-30">
                         <FolderOpen className="w-12 h-12 mb-4 mx-auto" />
-                        <p>Project empty or no file selected</p>
+                        <p>Project loaded. Select a file from the explorer.</p>
                       </div>
                     )}
                   </div>
                 )}
               </div>
 
-              {/* Output Pane */}
               <div className="flex-1 flex flex-col bg-[#131314]">
                 <div className="flex items-center justify-between px-4 py-1.5 bg-[#202124] border-b border-[#3c4043]">
                   <div className="flex items-center gap-2">
@@ -417,7 +493,7 @@ const App: React.FC = () => {
                   ) : (
                     <div className="flex flex-col items-center justify-center h-full text-slate-700 italic">
                       <Sparkles className="w-12 h-12 mb-4 opacity-10" />
-                      <p>Run Migration to view output</p>
+                      <p>Run migration to view output</p>
                     </div>
                   )}
                 </div>
@@ -426,7 +502,6 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Status Bar */}
         <div className="h-8 border-t border-[#3c4043] bg-[#1e1f20] flex items-center px-4 justify-between">
           <div className="flex items-center gap-6 text-[10px] font-medium text-[#9aa0a6]">
             <div className="flex items-center gap-1.5">
@@ -436,7 +511,7 @@ const App: React.FC = () => {
             {analysis && <span>ROOT: {analysis.projectType}</span>}
           </div>
           <div className="text-[10px] text-[#5f6368] font-bold tracking-tighter">
-            GEMINI ENGINE V3 • ASYNCHRONOUS PIPELINE ENABLED
+            GEMINI ENGINE V3 • HIERARCHICAL MAPPING ENABLED
           </div>
         </div>
       </main>

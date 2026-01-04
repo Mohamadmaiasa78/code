@@ -4,6 +4,7 @@ import { ProjectFile, ProjectAnalysis, Language } from "../types";
 
 export class GeminiConversionService {
   private getAI() {
+    // Explicitly using the pre-configured environment variable as required
     return new GoogleGenAI({ apiKey: process.env.API_KEY });
   }
 
