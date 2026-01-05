@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useMemo } from 'react';
 import JSZip from 'jszip';
 import { 
@@ -37,7 +36,6 @@ const CONFIG_FILES = [
   '.env', '.gitignore', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'
 ];
 
-const CONVERTIBLE_EXTENSIONS = ['.html', '.php', '.py', '.java', '.js', '.css', '.ts', '.jsx', '.tsx', '.json', '.xml', '.scss', '.less'];
 const BINARY_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.mp4', '.zip', '.pdf', '.exe', '.dll', '.bin', '.obj', '.svg', '.ico', '.woff', '.woff2', '.ttf'];
 
 interface FileTreeNode {
@@ -164,9 +162,9 @@ const App: React.FC = () => {
       try {
         const res = await conversionService.analyzeProject(loadedFiles);
         setAnalysis(res);
-        if (sourceLang === 'auto') setSourceLang(res.primaryLanguage);
+        if (sourceLang === 'auto') setSourceLang(res.primaryLanguage as Language);
       } catch (err) {
-        console.error("Analysis failed", err);
+        console.error("Analyse mislukt", err);
       } finally {
         setIsProcessing(false);
       }
@@ -187,7 +185,7 @@ const App: React.FC = () => {
     const zip = new JSZip();
     const newHistoryItems: ConversionHistoryItem[] = [];
 
-    const effectiveSourceLang = sourceLang === 'auto' ? (analysis?.primaryLanguage || 'javascript') : sourceLang;
+    const effectiveSourceLang = sourceLang === 'auto' ? (analysis?.primaryLanguage as Language || 'javascript') : sourceLang;
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -228,7 +226,6 @@ const App: React.FC = () => {
           zip.file(rf.path, rf.content);
         });
 
-        // Add to history
         newHistoryItems.push({
           id: `hist-${Date.now()}-${file.id}`,
           fileId: file.id,
@@ -251,7 +248,7 @@ const App: React.FC = () => {
       setProgress(Math.round(((i + 1) / files.length) * 100));
     }
 
-    setHistory(prev => [...newHistoryItems, ...prev].slice(0, 50)); // Keep last 50 entries
+    setHistory(prev => [...newHistoryItems, ...prev].slice(0, 50));
 
     const conversionReport: ConversionReport = {
       timestamp: new Date().toISOString(),
@@ -262,7 +259,7 @@ const App: React.FC = () => {
       splitsFound: splits,
       mergesFound: 0,
       manualReviewRequired: errors,
-      notes: `Strict migration engine: ${convertedCount} files converted. ${preservedCount} assets/configs preserved exactly.`
+      notes: `Strict migration engine: ${convertedCount} bestanden geconverteerd.`
     };
 
     zip.file("conversion_report.json", JSON.stringify(conversionReport, null, 2));
@@ -342,7 +339,7 @@ const App: React.FC = () => {
               <span className="text-[10px] font-bold uppercase tracking-wider">Strict Policy</span>
             </div>
             <p className="text-[10px] text-slate-400 leading-relaxed">
-              Config files & binaries are preserved exactly. Logic mapping ensures architectural integrity.
+              Configuratiebestanden & binaries worden exact behouden. Logica-mapping bewaart de architectuur.
             </p>
           </div>
 
@@ -365,7 +362,7 @@ const App: React.FC = () => {
                 className="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-[#3c4043] hover:bg-[#4a4d51] border border-[#5f6368]/30 rounded-lg text-sm transition-all text-[#e3e3e3]"
               >
                 <FolderOpen className="w-4 h-4 text-[#8ab4f8]" />
-                Load Codebase
+                Project laden
               </button>
             )}
             <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} {...({ webkitdirectory: "", directory: "" } as any)} />
@@ -374,14 +371,14 @@ const App: React.FC = () => {
           <div className="space-y-4">
             <label className="block text-[10px] font-bold text-[#9aa0a6] uppercase tracking-widest">Pipeline Config</label>
             <div className="space-y-2">
-              <span className="text-xs text-[#9aa0a6]">Source</span>
+              <span className="text-xs text-[#9aa0a6]">Bron</span>
               <select value={sourceLang} onChange={(e) => setSourceLang(e.target.value as any)} className="w-full bg-[#0f1011] border border-[#3c4043] rounded-lg p-2 text-sm">
                 <option value="auto">Auto-detect</option>
                 {LANGUAGES.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
               </select>
             </div>
             <div className="space-y-2">
-              <span className="text-xs text-[#9aa0a6]">Target</span>
+              <span className="text-xs text-[#9aa0a6]">Doel</span>
               <select value={targetLang} onChange={(e) => setTargetLang(e.target.value as Language)} className="w-full bg-[#0f1011] border border-[#3c4043] rounded-lg p-2 text-sm">
                 {LANGUAGES.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
               </select>
@@ -401,7 +398,7 @@ const App: React.FC = () => {
             className="w-full flex items-center justify-center gap-2 py-3.5 bg-[#8ab4f8] hover:bg-[#a6c1ee] disabled:bg-[#3c4043] disabled:text-[#9aa0a6] text-[#1e1f20] rounded-xl font-bold transition-all shadow-xl shadow-blue-500/10 active:scale-[0.98]"
           >
             {isProcessing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5 fill-current" />}
-            {isProcessing ? `Migrating ${progress}%` : 'Execute Migration'}
+            {isProcessing ? `Migratie ${progress}%` : 'Migratie Uitvoeren'}
           </button>
           
           {zipUrl && (
@@ -427,14 +424,14 @@ const App: React.FC = () => {
                 onClick={() => setActiveSidebarTab('history')}
                 className={`py-2 text-[10px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 ${activeSidebarTab === 'history' ? 'text-[#8ab4f8] bg-[#1a1b1c]' : 'text-[#9aa0a6] hover:bg-[#2b2c2f]'}`}
               >
-                <History className="w-3 h-3" /> History
+                <History className="w-3 h-3" /> Historie
               </button>
             </div>
             
             <div className="flex-1 overflow-y-auto pt-2">
               {activeSidebarTab === 'explorer' ? (
                 files.length > 0 ? renderTree(fileTree) : (
-                  <div className="p-8 text-center opacity-20"><FolderOpen className="w-8 h-8 mx-auto mb-2" /><p className="text-[10px]">Empty Project</p></div>
+                  <div className="p-8 text-center opacity-20"><FolderOpen className="w-8 h-8 mx-auto mb-2" /><p className="text-[10px]">Leeg Project</p></div>
                 )
               ) : (
                 <div className="flex flex-col">
@@ -458,7 +455,7 @@ const App: React.FC = () => {
                       </div>
                     </button>
                   )) : (
-                    <div className="p-8 text-center opacity-20"><Clock className="w-8 h-8 mx-auto mb-2" /><p className="text-[10px]">No History Yet</p></div>
+                    <div className="p-8 text-center opacity-20"><Clock className="w-8 h-8 mx-auto mb-2" /><p className="text-[10px]">Nog geen historie</p></div>
                   )}
                 </div>
               )}
@@ -472,7 +469,7 @@ const App: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <Terminal className="w-3 h-3 text-[#9aa0a6]" />
                     <span className="text-[10px] font-medium uppercase text-[#9aa0a6]">
-                      {currentHistoryItem ? 'Original Source (Historical)' : (currentFile ? `Source: ${currentFile.path}` : 'Code Preview')}
+                      {currentHistoryItem ? 'Origineel (Historie)' : (currentFile ? `Bron: ${currentFile.path}` : 'Code Preview')}
                     </span>
                   </div>
                 </div>
@@ -481,12 +478,12 @@ const App: React.FC = () => {
                     <pre className="text-[#e3e3e3] whitespace-pre-wrap">{currentHistoryItem.originalContent}</pre>
                   ) : currentFile ? (
                     currentFile.isAsset ? (
-                      <div className="flex flex-col items-center justify-center h-full opacity-50 text-center"><Archive className="w-12 h-12 mb-2" /><p>Binary Asset Preserved</p></div>
+                      <div className="flex flex-col items-center justify-center h-full opacity-50 text-center"><Archive className="w-12 h-12 mb-2" /><p>Binary Asset Behouden</p></div>
                     ) : (
                       <pre className="text-[#e3e3e3] whitespace-pre-wrap">{currentFile.content}</pre>
                     )
                   ) : (
-                    <div className="flex flex-col items-center justify-center h-full opacity-20"><FolderOpen className="w-12 h-12 mb-4" /><p>Select item to inspect</p></div>
+                    <div className="flex flex-col items-center justify-center h-full opacity-20"><FolderOpen className="w-12 h-12 mb-4" /><p>Selecteer een bestand</p></div>
                   )}
                 </div>
               </div>
@@ -496,13 +493,13 @@ const App: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <Sparkles className="w-3 h-3 text-[#8ab4f8]" />
                     <span className="text-[10px] font-medium uppercase text-[#9aa0a6]">
-                      {currentHistoryItem ? 'Transpiled Output (Historical)' : 'Target Build Output'}
+                      {currentHistoryItem ? 'Output (Historie)' : 'Target Build Output'}
                     </span>
                   </div>
                 </div>
                 <div className="flex-1 overflow-auto p-6 bg-[#0f1011]">
                   {currentFile?.status === 'processing' ? (
-                    <div className="flex flex-col items-center justify-center h-full space-y-4"><Loader2 className="w-8 h-8 text-[#8ab4f8] animate-spin" /><p className="text-xs font-mono text-[#8ab4f8]">Transpiling logic...</p></div>
+                    <div className="flex flex-col items-center justify-center h-full space-y-4"><Loader2 className="w-8 h-8 text-[#8ab4f8] animate-spin" /><p className="text-xs font-mono text-[#8ab4f8]">Transpileren...</p></div>
                   ) : (currentHistoryItem?.outputFiles || currentFile?.outputFiles || []).length ? (
                     (currentHistoryItem?.outputFiles || currentFile?.outputFiles || []).map((out, idx) => (
                       <div key={idx} className="mb-8 last:mb-0">
@@ -521,10 +518,10 @@ const App: React.FC = () => {
 
         <div className="h-8 border-t border-[#3c4043] bg-[#1e1f20] flex items-center px-4 justify-between">
           <div className="flex items-center gap-6 text-[10px] font-medium text-[#9aa0a6]">
-            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm" /> ENGINE ACTIVE</div>
+            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm" /> ENGINE ACTIEF</div>
             {analysis && <span className="uppercase">Project: {analysis.projectType}</span>}
           </div>
-          <div className="text-[10px] text-[#5f6368] font-bold tracking-tighter">GEMINI 3 PRO • MAPPING HISTORY ENABLED</div>
+          <div className="text-[10px] text-[#5f6368] font-bold tracking-tighter">GEMINI 1.5 PRO • MAPPING HISTORY ENABLED</div>
         </div>
       </main>
     </div>

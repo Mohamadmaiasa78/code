@@ -1,12 +1,12 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { ProjectFile, ProjectAnalysis, Language } from "../types";
 
 export class GeminiConversionService {
   private getAI() {
+    // Gebruikt de API_KEY die via vite.config.ts is gedefinieerd
     const apiKey = process.env.API_KEY;
     if (!apiKey) {
-      throw new Error("API Key not found. Please ensure the API environment is correctly configured.");
+      throw new Error("API Key niet gevonden. Zorg ervoor dat GEMINI_API_KEY in je .env.local staat.");
     }
     return new GoogleGenAI({ apiKey });
   }
@@ -41,7 +41,7 @@ export class GeminiConversionService {
       `;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-1.5-flash', // GEWIJZIGD: Gebruik 1.5 Flash voor snelle analyse
         contents: prompt,
         config: {
           responseMimeType: "application/json",
@@ -63,7 +63,7 @@ export class GeminiConversionService {
       return JSON.parse(cleanedJson) as ProjectAnalysis;
     } catch (error) {
       console.error("Gemini Project Analysis Error:", error);
-      throw new Error("Failed to analyze project structure.");
+      throw new Error("Projectanalyse mislukt.");
     }
   }
 
@@ -94,7 +94,7 @@ export class GeminiConversionService {
       `;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-preview',
+        model: 'gemini-1.5-pro', // GEWIJZIGD: Gebruik 1.5 Pro voor nauwkeurige transpilatie
         contents: prompt,
         config: {
           systemInstruction: `You are a codebase conversion engine. FOLLOW RULES STRICTLY:
@@ -133,7 +133,7 @@ export class GeminiConversionService {
       return result.files || [];
     } catch (error) {
       console.error(`Gemini Conversion Error for ${file.name}:`, error);
-      throw new Error(`Failed to convert ${file.name}.`);
+      throw new Error(`Conversie mislukt voor ${file.name}.`);
     }
   }
 }
