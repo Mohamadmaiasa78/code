@@ -1,40 +1,47 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { ProjectFile, ProjectAnalysis, Language } from "../types";
 
 export class GeminiConversionService {
   private getAI() {
-    // Uses the API_KEY environment variable defined in your vite.config.ts
     const apiKey = process.env.API_KEY;
     if (!apiKey) {
-      throw new Error("API Key not found. Please ensure GEMINI_API_KEY is set in your .env.local file.");
+      throw new Error("API Key not found. Please ensure the API environment is correctly configured.");
     }
     return new GoogleGenAI({ apiKey });
   }
 
   private cleanJsonResponse(text: string): string {
-    // Removes markdown code blocks (e.g., ```json ... ```) to ensure valid JSON parsing
-    const jsonMatch = text.match(/```json\n([\s\S]*?)\n```/) || 
-                      text.match(/```\n([\s\S]*?)\n```/) ||
-                      [null, text];
-    return (jsonMatch[1] || text).trim();
+    let cleaned = text.trim();
+    const jsonMatch = cleaned.match(/^(?:```json|```)?\s*([\s\S]*?)\s*(?:```)?$/);
+    if (jsonMatch && jsonMatch[1]) {
+      cleaned = jsonMatch[1].trim();
+    }
+    return cleaned;
   }
 
   async analyzeProject(files: ProjectFile[]): Promise<ProjectAnalysis> {
     try {
       const ai = this.getAI();
-      const fileManifest = files.map(f => ({ name: f.name, path: f.path, size: f.content.length }));
+      const fileManifest = files.map(f => ({ 
+        name: f.name, 
+        path: f.path, 
+        size: f.content.length,
+        isAsset: f.isAsset 
+      }));
       
       const prompt = `
         Analyze this project structure and file manifest:
         ${JSON.stringify(fileManifest, null, 2)}
         
-        Determine the project type (e.g., Maven, Node.js, WordPress Plugin, Static HTML), primary languages, 
-        frameworks detected, and any ambiguous files. Suggest a logical target language for conversion.
+        1. Determine project type (React/Vite/Next.js, Spring Boot/Maven, WordPress, etc.).
+        2. Identify if it is mixed (frontend and backend).
+        3. Identify primary languages and frameworks.
+        4. Suggest target conversion path based on user requested target.
       `;
 
-      // Updated to use the valid gemini-1.5-flash model
       const response = await ai.models.generateContent({
-        model: 'gemini-1.5-flash',
+        model: 'gemini-3-flash-preview',
         contents: prompt,
         config: {
           responseMimeType: "application/json",
@@ -56,7 +63,7 @@ export class GeminiConversionService {
       return JSON.parse(cleanedJson) as ProjectAnalysis;
     } catch (error) {
       console.error("Gemini Project Analysis Error:", error);
-      throw new Error("Failed to analyze project structure. Please check your network connection or API key.");
+      throw new Error("Failed to analyze project structure.");
     }
   }
 
@@ -64,34 +71,41 @@ export class GeminiConversionService {
     file: ProjectFile, 
     sourceLang: Language, 
     targetLang: Language, 
-    autoSplit: boolean,
-    systemInstruction?: string
+    autoSplit: boolean
   ): Promise<Array<{ name: string; content: string; path: string }>> {
     try {
       const ai = this.getAI();
       
       const prompt = `
-        Transpile the following code from ${sourceLang} to ${targetLang}.
+        Transpile from ${sourceLang} to ${targetLang}.
         
         FILE PATH: ${file.path}
         CODE:
         \`\`\`${sourceLang}
         ${file.content}
         \`\`\`
-        
-        ${autoSplit ? `
-        IMPORTANT: If the target language patterns suggest splitting this file into multiple components 
-        (e.g., one Python file with multiple classes into separate Java files, or one large HTML file into header/footer/content PHP templates), 
-        please provide the output as a set of separate files. 
-        ` : 'Maintain a 1:1 file mapping. If unresolved, mark with TODO comments.'}
+
+        TARGET REQUIREMENTS:
+        - If converting to Spring Boot:
+            * Create src/main/java/.../Application.java, controllers/, models/, etc.
+            * For frontend files, they must be preserved and put ONLY in src/main/resources/static/.
+            * NEVER convert React components to Java classes.
+        - FOLDERS: Maintain original structure unless idiomatic target structure dictates otherwise (e.g., Java package folders).
       `;
 
-      // Updated to use the valid gemini-1.5-pro model for complex code logic
       const response = await ai.models.generateContent({
-        model: 'gemini-1.5-pro',
+        model: 'gemini-3-pro-preview',
         contents: prompt,
         config: {
-          systemInstruction: systemInstruction || "You are a world-class code migration tool. Preserve logic perfectly. Output results in a strictly valid JSON array of files.",
+          systemInstruction: `You are a codebase conversion engine. FOLLOW RULES STRICTLY:
+1. NEVER transpile config files (package.json, tsconfig.json, vite.config.ts, webpack.config.js, pom.xml, composer.json, manifest.json, .env, .gitignore).
+2. NEVER convert React components into Java classes.
+3. NEVER rewrite frontend build tools into backend code.
+4. If converting to Spring Boot: Place frontend files ONLY inside src/main/resources/static/.
+5. Create clean project structure for backend: Application.java, controllers/, resources/static/.
+6. Use idiomatic patterns of the target language.
+7. Do not mix frontend and backend responsibilities.
+8. Output MUST be a valid JSON object with a "files" array containing name, path, and content.`,
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
@@ -101,9 +115,9 @@ export class GeminiConversionService {
                 items: {
                   type: Type.OBJECT,
                   properties: {
-                    name: { type: Type.STRING, description: "New filename" },
-                    path: { type: Type.STRING, description: "Relative path in project" },
-                    content: { type: Type.STRING, description: "Transpiled code" }
+                    name: { type: Type.STRING },
+                    path: { type: Type.STRING },
+                    content: { type: Type.STRING }
                   },
                   required: ["name", "path", "content"]
                 }
@@ -118,8 +132,8 @@ export class GeminiConversionService {
       const result = JSON.parse(cleanedJson);
       return result.files || [];
     } catch (error) {
-      console.error(`Gemini Conversion Error for file ${file.name}:`, error);
-      throw new Error(`Failed to convert ${file.name}. The AI model may be overloaded or the file contains unsupported constructs.`);
+      console.error(`Gemini Conversion Error for ${file.name}:`, error);
+      throw new Error(`Failed to convert ${file.name}.`);
     }
   }
 }

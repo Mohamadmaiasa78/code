@@ -24,6 +24,7 @@ export interface ProjectFile {
   status: FileStatus;
   error?: string;
   isAsset?: boolean;
+  originalFile?: File; // To support unchanged binary copying
 }
 
 export interface ProjectAnalysis {
@@ -39,4 +40,16 @@ export interface ConversionJob {
   status: 'pending' | 'running' | 'completed' | 'failed';
   progress: number;
   report?: ConversionReport;
+}
+
+export interface ConversionHistoryItem {
+  id: string;
+  fileId: string;
+  fileName: string;
+  filePath: string;
+  timestamp: string;
+  sourceLang: string;
+  targetLang: string;
+  originalContent: string;
+  outputFiles: Array<{ name: string; content: string; path: string }>;
 }

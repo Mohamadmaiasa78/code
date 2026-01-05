@@ -1,17 +1,21 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+
+import React, { useState, useRef, useMemo } from 'react';
+import JSZip from 'jszip';
 import { 
   Language, 
   ProjectFile, 
   FileStatus, 
   ProjectAnalysis, 
-  ConversionReport 
+  ConversionReport,
+  ConversionHistoryItem
 } from './types';
 import { conversionService } from './services/geminiService';
 import { 
-  Code2, ArrowRightLeft, Copy, Check, AlertCircle, Play, Sparkles,
-  Trash2, Terminal, Info, FolderOpen, FileCode, Files, ChevronRight,
-  Loader2, Download, Layers, ShieldCheck, FileJson, FileText, Upload,
-  Folder, ChevronDown
+  Code2, Play, Sparkles, FolderOpen, FileCode, ChevronRight,
+  Loader2, Download, Layers, ShieldCheck, FileJson, FileText,
+  Folder, ChevronDown, CheckCircle2, AlertTriangle, FileWarning,
+  Terminal, Settings, Archive, ShieldAlert, History, Clock, 
+  Eye, Trash2, ArrowLeftRight
 } from 'lucide-react';
 
 const LANGUAGES: { id: Language; label: string }[] = [
@@ -23,10 +27,19 @@ const LANGUAGES: { id: Language; label: string }[] = [
   { id: 'go', label: 'Go' },
   { id: 'rust', label: 'Rust' },
   { id: 'php', label: 'PHP' },
-  { id: 'html', label: 'HTML' }
+  { id: 'html', label: 'HTML' },
+  { id: 'css', label: 'CSS' }
 ];
 
-// Tree node interface for folder organization
+const CONFIG_FILES = [
+  'package.json', 'tsconfig.json', 'vite.config.ts', 'vite.config.js', 
+  'webpack.config.js', 'pom.xml', 'composer.json', 'manifest.json', 
+  '.env', '.gitignore', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'
+];
+
+const CONVERTIBLE_EXTENSIONS = ['.html', '.php', '.py', '.java', '.js', '.css', '.ts', '.jsx', '.tsx', '.json', '.xml', '.scss', '.less'];
+const BINARY_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.mp4', '.zip', '.pdf', '.exe', '.dll', '.bin', '.obj', '.svg', '.ico', '.woff', '.woff2', '.ttf'];
+
 interface FileTreeNode {
   name: string;
   path: string;
@@ -36,52 +49,42 @@ interface FileTreeNode {
 }
 
 const App: React.FC = () => {
-  // Input Modes
   const [inputMode, setInputMode] = useState<'paste' | 'folder'>('paste');
   const [sourceLang, setSourceLang] = useState<Language | 'auto'>('auto');
   const [targetLang, setTargetLang] = useState<Language>('java');
   const [autoSplit, setAutoSplit] = useState(true);
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'explorer' | 'history'>('explorer');
   
-  // Project State
   const [files, setFiles] = useState<ProjectFile[]>([]);
+  const [history, setHistory] = useState<ConversionHistoryItem[]>([]);
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [analysis, setAnalysis] = useState<ProjectAnalysis | null>(null);
   const [report, setReport] = useState<ConversionReport | null>(null);
   const [progress, setProgress] = useState(0);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['root']));
+  const [zipUrl, setZipUrl] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const outputRef = useRef<HTMLDivElement>(null);
 
   const currentFile = useMemo(() => files.find(f => f.id === selectedFileId), [files, selectedFileId]);
+  const currentHistoryItem = useMemo(() => history.find(h => h.id === selectedHistoryId), [history, selectedHistoryId]);
 
-  // Build a hierarchical tree from flat files list
   const fileTree = useMemo(() => {
     const root: FileTreeNode = { name: 'root', path: 'root', type: 'folder', children: {} };
     files.forEach(file => {
-      const parts = file.path.split('/');
+      const parts = file.path.split('/').filter(p => p !== '');
       let current = root;
       let currentPath = '';
       
       parts.forEach((part, index) => {
         currentPath = currentPath ? `${currentPath}/${part}` : part;
         if (index === parts.length - 1) {
-          current.children[part] = { 
-            name: part, 
-            path: currentPath, 
-            type: 'file', 
-            children: {}, 
-            file 
-          };
+          current.children[part] = { name: part, path: currentPath, type: 'file', children: {}, file };
         } else {
           if (!current.children[part]) {
-            current.children[part] = { 
-              name: part, 
-              path: currentPath, 
-              type: 'folder', 
-              children: {} 
-            };
+            current.children[part] = { name: part, path: currentPath, type: 'folder', children: {} };
           }
           current = current.children[part];
         }
@@ -97,44 +100,43 @@ const App: React.FC = () => {
     setExpandedFolders(next);
   };
 
-  /**
-   * FIX: This function now filters out binary files and hidden directories 
-   * like .git to prevent garbled text glitches.
-   */
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
     if (!fileList) return;
 
+    setZipUrl(null);
+    setReport(null);
     const loadedFiles: ProjectFile[] = [];
+    
     const readers = Array.from(fileList).map((fileItem, index) => {
       const file = fileItem as File & { webkitRelativePath?: string };
       const path = file.webkitRelativePath || file.name;
 
       return new Promise<void>((resolve) => {
-        // FILTER: Ignore hidden system folders (.git, .vscode) and node_modules
-        if (path.includes('/.') || path.includes('node_modules/') || path.startsWith('.')) {
+        if (path.includes('node_modules/') || path.includes('.git/')) {
           resolve();
           return;
         }
 
-        // FILTER: Detect binary assets vs source code
-        const isAsset = /\.(png|jpg|jpeg|gif|svg|woff|woff2|ttf|eot|ico|pdf|zip|exe|dll|bin|obj)$/i.test(file.name);
-        
-        if (isAsset) {
+        const ext = file.name.slice((file.name.lastIndexOf(".") - 1 >>> 0) + 2).toLowerCase();
+        const isBinary = BINARY_EXTENSIONS.includes(`.${ext}`);
+        const isConfig = CONFIG_FILES.includes(file.name);
+
+        if (isBinary) {
           loadedFiles.push({
             id: `asset-${Date.now()}-${index}`,
             name: file.name,
             path: path,
-            content: '[Binary Asset - Preserved]',
-            outputFiles: [{ name: file.name, content: '[Binary Asset - Preserved]', path: path }],
+            content: '[Binary Content]',
+            outputFiles: [],
             status: 'completed',
-            isAsset: true
+            isAsset: true,
+            originalFile: file
           });
           resolve();
           return;
         }
 
-        // PROCESS: Only read actual text/code files
         const reader = new FileReader();
         reader.onload = (event) => {
           loadedFiles.push({
@@ -143,7 +145,9 @@ const App: React.FC = () => {
             path: path,
             content: event.target?.result as string,
             outputFiles: [],
-            status: 'idle'
+            status: isConfig ? 'completed' : 'idle',
+            originalFile: file,
+            ...(isConfig ? { outputFiles: [{ name: file.name, content: event.target?.result as string, path: path }] } : {})
           });
           resolve();
         };
@@ -154,45 +158,49 @@ const App: React.FC = () => {
     await Promise.all(readers);
     setFiles(loadedFiles);
     setInputMode('folder');
-    if (loadedFiles.length > 0) setSelectedFileId(loadedFiles[0].id);
-    
-    // Auto-expand paths for visible files
-    const pathsToExpand = new Set(['root']);
-    loadedFiles.forEach(f => {
-      const parts = f.path.split('/');
-      let current = '';
-      parts.slice(0, -1).forEach(p => {
-        current = current ? `${current}/${p}` : p;
-        pathsToExpand.add(current);
-      });
-    });
-    setExpandedFolders(pathsToExpand);
-
-    setIsProcessing(true);
-    try {
-      const result = await conversionService.analyzeProject(loadedFiles);
-      setAnalysis(result);
-      if (sourceLang === 'auto') setSourceLang(result.primaryLanguage);
-    } catch (err) {
-      console.error("Analysis failed", err);
-    } finally {
-      setIsProcessing(false);
+    if (loadedFiles.length > 0) {
+      setSelectedFileId(loadedFiles[0].id);
+      setIsProcessing(true);
+      try {
+        const res = await conversionService.analyzeProject(loadedFiles);
+        setAnalysis(res);
+        if (sourceLang === 'auto') setSourceLang(res.primaryLanguage);
+      } catch (err) {
+        console.error("Analysis failed", err);
+      } finally {
+        setIsProcessing(false);
+      }
     }
   };
 
   const runConversion = async () => {
-    if (files.length === 0) return;
     setIsProcessing(true);
     setProgress(0);
     setReport(null);
+    setZipUrl(null);
 
     let splits = 0;
-    let successful = 0;
+    let convertedCount = 0;
+    let preservedCount = 0;
+    let errorCount = 0;
+    const errors: string[] = [];
+    const zip = new JSZip();
+    const newHistoryItems: ConversionHistoryItem[] = [];
+
+    const effectiveSourceLang = sourceLang === 'auto' ? (analysis?.primaryLanguage || 'javascript') : sourceLang;
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      if (file.isAsset) {
-        successful++;
+      const isConfig = CONFIG_FILES.includes(file.name);
+      
+      if (file.isAsset || isConfig) {
+        preservedCount++;
+        if (file.isAsset && file.originalFile) {
+          zip.file(file.path, file.originalFile);
+        } else {
+          zip.file(file.path, file.content);
+        }
+        setProgress(Math.round(((i + 1) / files.length) * 100));
         continue;
       }
 
@@ -202,58 +210,71 @@ const App: React.FC = () => {
       try {
         const resultFiles = await conversionService.convertFileWithSplitting(
           file, 
-          sourceLang === 'auto' ? (analysis?.primaryLanguage || 'python') : sourceLang,
+          effectiveSourceLang,
           targetLang,
           autoSplit
         );
 
         if (resultFiles.length > 1) splits++;
-        successful++;
+        convertedCount++;
 
         setFiles(prev => prev.map(f => f.id === file.id ? { 
           ...f, 
           status: 'completed', 
           outputFiles: resultFiles 
         } : f));
+
+        resultFiles.forEach(rf => {
+          zip.file(rf.path, rf.content);
+        });
+
+        // Add to history
+        newHistoryItems.push({
+          id: `hist-${Date.now()}-${file.id}`,
+          fileId: file.id,
+          fileName: file.name,
+          filePath: file.path,
+          timestamp: new Date().toLocaleTimeString(),
+          sourceLang: effectiveSourceLang,
+          targetLang: targetLang,
+          originalContent: file.content,
+          outputFiles: resultFiles
+        });
+
       } catch (err: any) {
+        errorCount++;
+        errors.push(file.name);
         setFiles(prev => prev.map(f => f.id === file.id ? { ...f, status: 'error', error: err.message } : f));
+        zip.file(file.path, file.content);
       }
 
       setProgress(Math.round(((i + 1) / files.length) * 100));
     }
 
-    setReport({
+    setHistory(prev => [...newHistoryItems, ...prev].slice(0, 50)); // Keep last 50 entries
+
+    const conversionReport: ConversionReport = {
       timestamp: new Date().toISOString(),
       detectedProjectType: analysis?.projectType || 'Generic Codebase',
-      languagesFound: analysis?.primaryLanguage ? [analysis.primaryLanguage] : [],
+      languagesFound: analysis ? [analysis.primaryLanguage] : [],
       totalFiles: files.length,
-      convertedFiles: successful,
+      convertedFiles: convertedCount,
       splitsFound: splits,
       mergesFound: 0,
-      manualReviewRequired: files.filter(f => f.status === 'error').map(f => f.name),
-      notes: "Project transpilation complete. Assets preserved in target directory."
-    });
+      manualReviewRequired: errors,
+      notes: `Strict migration engine: ${convertedCount} files converted. ${preservedCount} assets/configs preserved exactly.`
+    };
 
+    zip.file("conversion_report.json", JSON.stringify(conversionReport, null, 2));
+    
+    const content = await zip.generateAsync({ type: 'blob' });
+    setZipUrl(URL.createObjectURL(content));
+    setReport(conversionReport);
     setIsProcessing(false);
   };
 
-  const handleDownload = () => {
-    const manifest = {
-      report,
-      files: files.flatMap(f => f.outputFiles)
-    };
-    const blob = new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `converted_project_${Date.now()}.json`;
-    a.click();
-  };
-
-  // Recursive renderer for the file tree
   const renderTree = (node: FileTreeNode, depth = 0) => {
     const children = Object.values(node.children).sort((a, b) => {
-      // Folders first
       if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
@@ -262,7 +283,14 @@ const App: React.FC = () => {
       <div key={node.path} className="flex flex-col">
         {node.path !== 'root' && (
           <button
-            onClick={() => node.type === 'folder' ? toggleFolder(node.path) : setSelectedFileId(node.file?.id || null)}
+            onClick={() => {
+              if (node.type === 'folder') {
+                toggleFolder(node.path);
+              } else {
+                setSelectedFileId(node.file?.id || null);
+                setSelectedHistoryId(null);
+              }
+            }}
             className={`w-full group flex items-center gap-1.5 px-3 py-1.5 text-left text-[11px] transition-colors border-l-2 ${
               node.type === 'file' && selectedFileId === node.file?.id 
                 ? 'bg-[#2b2c2f] text-[#8ab4f8] border-[#8ab4f8]' 
@@ -282,13 +310,11 @@ const App: React.FC = () => {
                   node.file?.status === 'processing' ? '#3b82f6' : 
                   node.file?.status === 'error' ? '#f43f5e' : '#475569' 
                 }} />
-                <FileCode className="w-3.5 h-3.5 shrink-0 opacity-50 group-hover:opacity-100" />
+                {CONFIG_FILES.includes(node.name) ? <Settings className="w-3.5 h-3.5 opacity-50" /> : <FileCode className="w-3.5 h-3.5 opacity-50" />}
               </>
             )}
             <span className="truncate flex-1">{node.name}</span>
-            {node.file && node.file.outputFiles.length > 1 && (
-              <span className="text-[8px] bg-[#3c4043] text-white px-1 rounded">SPLIT</span>
-            )}
+            {node.file?.isAsset && <span className="text-[8px] bg-slate-700 text-slate-400 px-1 rounded">ASSET</span>}
           </button>
         )}
         
@@ -310,6 +336,16 @@ const App: React.FC = () => {
         </div>
         
         <div className="flex-1 overflow-y-auto p-4 space-y-6">
+          <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 space-y-2">
+            <div className="flex items-center gap-2 text-red-400">
+              <ShieldAlert className="w-4 h-4" />
+              <span className="text-[10px] font-bold uppercase tracking-wider">Strict Policy</span>
+            </div>
+            <p className="text-[10px] text-slate-400 leading-relaxed">
+              Config files & binaries are preserved exactly. Logic mapping ensures architectural integrity.
+            </p>
+          </div>
+
           <div className="space-y-3">
             <label className="block text-[10px] font-bold text-[#9aa0a6] uppercase tracking-widest">Input Source</label>
             <div className="grid grid-cols-2 gap-2 p-1 bg-[#0f1011] rounded-lg border border-[#3c4043]">
@@ -324,191 +360,158 @@ const App: React.FC = () => {
             </div>
 
             {inputMode === 'folder' && (
-              <div className="space-y-2">
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  className="hidden" 
-                  onChange={handleFileUpload}
-                  {...({ webkitdirectory: "", directory: "" } as any)} 
-                />
-                <button 
-                  onClick={() => fileInputRef.current?.click()}
-                  className="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-[#3c4043] hover:bg-[#4a4d51] border border-[#5f6368]/30 rounded-lg text-sm transition-all text-[#e3e3e3]"
-                >
-                  <FolderOpen className="w-4 h-4 text-[#8ab4f8]" />
-                  Load Folder
-                </button>
-              </div>
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-[#3c4043] hover:bg-[#4a4d51] border border-[#5f6368]/30 rounded-lg text-sm transition-all text-[#e3e3e3]"
+              >
+                <FolderOpen className="w-4 h-4 text-[#8ab4f8]" />
+                Load Codebase
+              </button>
             )}
+            <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} {...({ webkitdirectory: "", directory: "" } as any)} />
           </div>
 
           <div className="space-y-4">
             <label className="block text-[10px] font-bold text-[#9aa0a6] uppercase tracking-widest">Pipeline Config</label>
             <div className="space-y-2">
-              <span className="text-xs text-[#9aa0a6]">Source Language</span>
-              <select 
-                value={sourceLang}
-                onChange={(e) => setSourceLang(e.target.value as any)}
-                className="w-full bg-[#0f1011] border border-[#3c4043] rounded-lg p-2 text-sm text-[#e3e3e3] outline-none focus:border-[#8ab4f8]"
-              >
+              <span className="text-xs text-[#9aa0a6]">Source</span>
+              <select value={sourceLang} onChange={(e) => setSourceLang(e.target.value as any)} className="w-full bg-[#0f1011] border border-[#3c4043] rounded-lg p-2 text-sm">
                 <option value="auto">Auto-detect</option>
                 {LANGUAGES.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
               </select>
             </div>
             <div className="space-y-2">
-              <span className="text-xs text-[#9aa0a6]">Target Language</span>
-              <select 
-                value={targetLang}
-                onChange={(e) => setTargetLang(e.target.value as Language)}
-                className="w-full bg-[#0f1011] border border-[#3c4043] rounded-lg p-2 text-sm text-[#e3e3e3] outline-none focus:border-[#8ab4f8]"
-              >
+              <span className="text-xs text-[#9aa0a6]">Target</span>
+              <select value={targetLang} onChange={(e) => setTargetLang(e.target.value as Language)} className="w-full bg-[#0f1011] border border-[#3c4043] rounded-lg p-2 text-sm">
                 {LANGUAGES.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
               </select>
             </div>
-            <div className="flex items-center justify-between p-3 bg-[#2b2c2f] rounded-lg border border-[#3c4043]">
-              <div className="flex items-center gap-2">
-                <Layers className="w-4 h-4 text-indigo-400" />
-                <span className="text-xs">Auto-split/merge</span>
-              </div>
-              <input 
-                type="checkbox" 
-                checked={autoSplit} 
-                onChange={(e) => setAutoSplit(e.target.checked)}
-                className="accent-[#8ab4f8] h-4 w-4"
-              />
-            </div>
           </div>
-
-          {analysis && (
-            <div className="p-3 bg-[#0f1011] rounded-lg border border-[#3c4043] space-y-2">
-              <div className="flex items-center gap-2 text-[#8ab4f8]">
-                <ShieldCheck className="w-3 h-3" />
-                <span className="text-[10px] font-bold uppercase tracking-widest">Pre-Analysis</span>
-              </div>
-              <div className="text-xs text-[#e3e3e3] font-medium">{analysis.projectType}</div>
-              <div className="text-[10px] text-[#9aa0a6]">Primary: <span className="text-white capitalize">{analysis.primaryLanguage}</span></div>
-            </div>
-          )}
         </div>
 
         <div className="p-4 border-t border-[#3c4043] space-y-3">
+          {isProcessing && (
+            <div className="w-full h-1 bg-[#202124] rounded-full overflow-hidden">
+              <div className="h-full bg-[#8ab4f8] transition-all duration-300" style={{ width: `${progress}%` }} />
+            </div>
+          )}
           <button 
             onClick={runConversion}
             disabled={isProcessing || files.length === 0}
             className="w-full flex items-center justify-center gap-2 py-3.5 bg-[#8ab4f8] hover:bg-[#a6c1ee] disabled:bg-[#3c4043] disabled:text-[#9aa0a6] text-[#1e1f20] rounded-xl font-bold transition-all shadow-xl shadow-blue-500/10 active:scale-[0.98]"
           >
             {isProcessing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5 fill-current" />}
-            {isProcessing ? `Processing ${progress}%` : 'Execute Migration'}
+            {isProcessing ? `Migrating ${progress}%` : 'Execute Migration'}
           </button>
-          {report && (
-            <button 
-              onClick={handleDownload}
-              className="w-full flex items-center justify-center gap-2 py-2.5 bg-transparent hover:bg-[#3c4043] border border-[#3c4043] rounded-xl text-xs font-semibold text-[#8ab4f8] transition-all"
-            >
-              <Download className="w-4 h-4" />
-              Download Build Artifacts (.json)
-            </button>
+          
+          {zipUrl && (
+            <a href={zipUrl} download="PolyGlot_Build.zip" className="w-full flex items-center justify-center gap-2 py-2.5 bg-emerald-500 hover:bg-emerald-600 rounded-xl text-xs font-bold text-[#1e1f20]">
+              <Archive className="w-4 h-4" />
+              Download Build Artifact
+            </a>
           )}
         </div>
       </aside>
 
       <main className="flex-1 flex flex-col bg-[#0f1011] overflow-hidden">
         <div className="flex-1 flex overflow-hidden">
-          {files.length > 0 && (
-            <div className="w-64 flex flex-col border-r border-[#3c4043] bg-[#1a1b1c] shrink-0">
-              <div className="px-4 py-2 bg-[#202124] border-b border-[#3c4043] flex items-center justify-between">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-[#9aa0a6]">Project Explorer</span>
-                <span className="text-[10px] text-[#5f6368]">{files.length} items</span>
-              </div>
-              <div className="flex-1 overflow-y-auto pt-2">
-                {renderTree(fileTree)}
-              </div>
+          <div className="w-64 flex flex-col border-r border-[#3c4043] bg-[#1a1b1c] shrink-0">
+            <div className="grid grid-cols-2 bg-[#202124] border-b border-[#3c4043]">
+              <button 
+                onClick={() => setActiveSidebarTab('explorer')}
+                className={`py-2 text-[10px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 ${activeSidebarTab === 'explorer' ? 'text-[#8ab4f8] bg-[#1a1b1c]' : 'text-[#9aa0a6] hover:bg-[#2b2c2f]'}`}
+              >
+                <Folder className="w-3 h-3" /> Explorer
+              </button>
+              <button 
+                onClick={() => setActiveSidebarTab('history')}
+                className={`py-2 text-[10px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 ${activeSidebarTab === 'history' ? 'text-[#8ab4f8] bg-[#1a1b1c]' : 'text-[#9aa0a6] hover:bg-[#2b2c2f]'}`}
+              >
+                <History className="w-3 h-3" /> History
+              </button>
             </div>
-          )}
+            
+            <div className="flex-1 overflow-y-auto pt-2">
+              {activeSidebarTab === 'explorer' ? (
+                files.length > 0 ? renderTree(fileTree) : (
+                  <div className="p-8 text-center opacity-20"><FolderOpen className="w-8 h-8 mx-auto mb-2" /><p className="text-[10px]">Empty Project</p></div>
+                )
+              ) : (
+                <div className="flex flex-col">
+                  {history.length > 0 ? history.map(item => (
+                    <button
+                      key={item.id}
+                      onClick={() => {
+                        setSelectedHistoryId(item.id);
+                        setSelectedFileId(null);
+                      }}
+                      className={`w-full group flex flex-col gap-1 px-4 py-3 text-left border-b border-[#3c4043] transition-colors ${selectedHistoryId === item.id ? 'bg-[#2b2c2f]' : 'hover:bg-[#202124]'}`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className={`text-[10px] font-bold truncate ${selectedHistoryId === item.id ? 'text-[#8ab4f8]' : 'text-[#e3e3e3]'}`}>{item.fileName}</span>
+                        <span className="text-[8px] text-[#9aa0a6]">{item.timestamp}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[8px] text-[#9aa0a6]">
+                        <span className="uppercase">{item.sourceLang}</span>
+                        <ArrowLeftRight className="w-2 h-2" />
+                        <span className="uppercase">{item.targetLang}</span>
+                      </div>
+                    </button>
+                  )) : (
+                    <div className="p-8 text-center opacity-20"><Clock className="w-8 h-8 mx-auto mb-2" /><p className="text-[10px]">No History Yet</p></div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
 
           <div className="flex-1 flex flex-col min-w-0">
-            {report && (
-              <div className="p-4 bg-indigo-500/10 border-b border-indigo-500/20 flex items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <FileJson className="w-5 h-5 text-indigo-400" />
-                  <div>
-                    <div className="text-xs font-bold uppercase text-[#9aa0a6]">Migration Success</div>
-                    <div className="text-[10px] text-slate-400">{report.convertedFiles}/{report.totalFiles} files converted. {report.splitsFound} splits generated.</div>
-                  </div>
-                </div>
-                <button className="px-3 py-1 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 text-[10px] font-bold rounded-full transition-all">View report.json</button>
-              </div>
-            )}
-
             <div className="flex-1 flex overflow-hidden">
               <div className="flex-1 flex flex-col border-r border-[#3c4043]">
-                <div className="flex items-center gap-2 px-4 py-1.5 bg-[#202124] border-b border-[#3c4043]">
-                  <Terminal className="w-3 h-3 text-[#9aa0a6]" />
-                  <span className="text-[10px] font-medium uppercase text-[#9aa0a6]">Original: {currentFile?.path || 'Source'}</span>
-                </div>
-                {inputMode === 'paste' ? (
-                  <textarea
-                    value={files[0]?.content || ''}
-                    onChange={(e) => {
-                      const newFile = {
-                        id: 'paste-1',
-                        name: 'snippet.txt',
-                        path: 'snippet.txt',
-                        content: e.target.value,
-                        outputFiles: [],
-                        status: 'idle' as FileStatus
-                      };
-                      setFiles([newFile]);
-                      setSelectedFileId('paste-1');
-                    }}
-                    className="flex-1 w-full bg-[#0f1011] p-6 text-sm font-mono text-[#e3e3e3] outline-none resize-none placeholder:text-[#3c4043]"
-                    placeholder="// Paste code snippet here..."
-                  />
-                ) : (
-                  <div className="flex-1 bg-[#0f1011] p-6 font-mono text-sm overflow-auto text-slate-500">
-                    {currentFile ? (
-                      <pre className="text-[#e3e3e3]">{currentFile.content}</pre>
-                    ) : (
-                      <div className="flex flex-col items-center justify-center h-full text-center opacity-30">
-                        <FolderOpen className="w-12 h-12 mb-4 mx-auto" />
-                        <p>Project loaded. Select a file from the explorer.</p>
-                      </div>
-                    )}
+                <div className="flex items-center justify-between px-4 py-1.5 bg-[#202124] border-b border-[#3c4043]">
+                  <div className="flex items-center gap-2">
+                    <Terminal className="w-3 h-3 text-[#9aa0a6]" />
+                    <span className="text-[10px] font-medium uppercase text-[#9aa0a6]">
+                      {currentHistoryItem ? 'Original Source (Historical)' : (currentFile ? `Source: ${currentFile.path}` : 'Code Preview')}
+                    </span>
                   </div>
-                )}
+                </div>
+                <div className="flex-1 bg-[#0f1011] p-6 font-mono text-sm overflow-auto text-slate-500">
+                  {currentHistoryItem ? (
+                    <pre className="text-[#e3e3e3] whitespace-pre-wrap">{currentHistoryItem.originalContent}</pre>
+                  ) : currentFile ? (
+                    currentFile.isAsset ? (
+                      <div className="flex flex-col items-center justify-center h-full opacity-50 text-center"><Archive className="w-12 h-12 mb-2" /><p>Binary Asset Preserved</p></div>
+                    ) : (
+                      <pre className="text-[#e3e3e3] whitespace-pre-wrap">{currentFile.content}</pre>
+                    )
+                  ) : (
+                    <div className="flex flex-col items-center justify-center h-full opacity-20"><FolderOpen className="w-12 h-12 mb-4" /><p>Select item to inspect</p></div>
+                  )}
+                </div>
               </div>
 
               <div className="flex-1 flex flex-col bg-[#131314]">
                 <div className="flex items-center justify-between px-4 py-1.5 bg-[#202124] border-b border-[#3c4043]">
                   <div className="flex items-center gap-2">
                     <Sparkles className="w-3 h-3 text-[#8ab4f8]" />
-                    <span className="text-[10px] font-medium uppercase text-[#9aa0a6]">Target Build</span>
+                    <span className="text-[10px] font-medium uppercase text-[#9aa0a6]">
+                      {currentHistoryItem ? 'Transpiled Output (Historical)' : 'Target Build Output'}
+                    </span>
                   </div>
                 </div>
                 <div className="flex-1 overflow-auto p-6 bg-[#0f1011]">
                   {currentFile?.status === 'processing' ? (
-                    <div className="flex flex-col items-center justify-center h-full space-y-4">
-                      <Loader2 className="w-8 h-8 text-[#8ab4f8] animate-spin" />
-                      <p className="text-xs font-mono text-[#8ab4f8]">Transpiling constructs...</p>
-                    </div>
-                  ) : currentFile?.outputFiles.length ? (
-                    currentFile.outputFiles.map((out, idx) => (
+                    <div className="flex flex-col items-center justify-center h-full space-y-4"><Loader2 className="w-8 h-8 text-[#8ab4f8] animate-spin" /><p className="text-xs font-mono text-[#8ab4f8]">Transpiling logic...</p></div>
+                  ) : (currentHistoryItem?.outputFiles || currentFile?.outputFiles || []).length ? (
+                    (currentHistoryItem?.outputFiles || currentFile?.outputFiles || []).map((out, idx) => (
                       <div key={idx} className="mb-8 last:mb-0">
-                        <div className="flex items-center gap-2 mb-2 text-[#8ab4f8]">
-                          <FileText className="w-3 h-3" />
-                          <span className="text-[10px] font-bold uppercase">{out.path}</span>
-                        </div>
-                        <pre className="p-4 bg-[#1e1f20] border border-[#3c4043] rounded-lg text-sm font-mono text-emerald-400 whitespace-pre-wrap">
-                          {out.content}
-                        </pre>
+                        <div className="flex items-center gap-2 mb-2 text-[#8ab4f8]"><FileText className="w-3 h-3" /><span className="text-[10px] font-bold uppercase">{out.path}</span></div>
+                        <pre className="p-4 bg-[#1e1f20] border border-[#3c4043] rounded-lg text-sm font-mono text-emerald-400 whitespace-pre-wrap">{out.content}</pre>
                       </div>
                     ))
                   ) : (
-                    <div className="flex flex-col items-center justify-center h-full text-slate-700 italic">
-                      <Sparkles className="w-12 h-12 mb-4 opacity-10" />
-                      <p>Run migration to view output</p>
-                    </div>
+                    <div className="flex flex-col items-center justify-center h-full opacity-20"><Sparkles className="w-12 h-12" /></div>
                   )}
                 </div>
               </div>
@@ -518,15 +521,10 @@ const App: React.FC = () => {
 
         <div className="h-8 border-t border-[#3c4043] bg-[#1e1f20] flex items-center px-4 justify-between">
           <div className="flex items-center gap-6 text-[10px] font-medium text-[#9aa0a6]">
-            <div className="flex items-center gap-1.5">
-              <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm" />
-              SYSTEM READY
-            </div>
-            {analysis && <span>ROOT: {analysis.projectType}</span>}
+            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm" /> ENGINE ACTIVE</div>
+            {analysis && <span className="uppercase">Project: {analysis.projectType}</span>}
           </div>
-          <div className="text-[10px] text-[#5f6368] font-bold tracking-tighter">
-            GEMINI ENGINE V1.5 • HIERARCHICAL MAPPING ENABLED
-          </div>
+          <div className="text-[10px] text-[#5f6368] font-bold tracking-tighter">GEMINI 3 PRO • MAPPING HISTORY ENABLED</div>
         </div>
       </main>
     </div>
