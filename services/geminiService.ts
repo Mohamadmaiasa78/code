@@ -1,53 +1,30 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { ProjectFile, ProjectAnalysis, Language } from "../types";
 
 export class GeminiConversionService {
-  /**
-   * Initialiseert de Gemini API client.
-   * Maakt gebruik van de verplichte process.env.API_KEY.
-   */
   private getAI() {
+    // Robust access to the API key. In Vite, process.env.API_KEY is replaced by the defined string.
+    // We access it directly to ensure the bundler replacement kicks in.
     const apiKey = process.env.API_KEY;
     
-    if (!apiKey || apiKey === 'undefined' || apiKey === '') {
-      throw new Error(
-        "CONFIGURATIEFOUT: De Gemini API-sleutel (process.env.API_KEY) is niet gevonden. " +
-        "Zorg ervoor dat GEMINI_API_KEY aanwezig is in je .env.local bestand en dat deze " +
-        "door vite.config.ts wordt doorgegeven als process.env.API_KEY."
-      );
+    if (!apiKey || apiKey.includes("API_KEY")) {
+      throw new Error("GEMINI_API_KEY is not configured. Please check your .env file or environment variables.");
     }
-    
     return new GoogleGenAI({ apiKey });
   }
 
-  /**
-   * Helper om JSON antwoorden van het model te cleanen van markdown formatting.
-   */
-  private cleanJsonResponse(text: string): string {
-    let cleaned = text.trim();
-    const jsonMatch = cleaned.match(/^(?:```json|```)?\s*([\s\S]*?)\s*(?:```)?$/);
-    if (jsonMatch && jsonMatch[1]) {
-      cleaned = jsonMatch[1].trim();
-    }
-    return cleaned;
+  private cleanJson(text: string): string {
+    return text.replace(/```json|```/g, "").trim();
   }
 
-  /**
-   * Analyseert de projectstructuur met Gemini 3 Flash.
-   */
   async analyzeProject(files: ProjectFile[]): Promise<ProjectAnalysis> {
     const ai = this.getAI();
-    const fileManifest = files.map(f => ({ 
-      name: f.name, 
-      path: f.path, 
-      size: f.content.length,
-      isAsset: f.isAsset 
-    }));
+    const manifest = files.slice(0, 50).map(f => ({ path: f.path, name: f.name }));
     
+    // Using gemini-2.0-flash-exp for reliable high-speed analysis
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: `Analyseer de volgende projectstructuur: ${JSON.stringify(fileManifest)}. Bepaal het projecttype en de primaire programmeertaal.`,
+      model: 'gemini-2.0-flash-exp',
+      contents: `Analyze this codebase structure: ${JSON.stringify(manifest)}. Identify the project type and primary programming language.`,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -55,8 +32,6 @@ export class GeminiConversionService {
           properties: {
             projectType: { type: Type.STRING },
             primaryLanguage: { type: Type.STRING },
-            framework: { type: Type.STRING },
-            ambiguousFiles: { type: Type.ARRAY, items: { type: Type.STRING } },
             suggestedTarget: { type: Type.STRING }
           },
           required: ["projectType", "primaryLanguage", "suggestedTarget"]
@@ -64,32 +39,18 @@ export class GeminiConversionService {
       }
     });
 
-    const text = response.text;
-    if (!text) throw new Error("Analyse mislukt: Geen antwoord van Gemini.");
-    return JSON.parse(this.cleanJsonResponse(text)) as ProjectAnalysis;
+    return JSON.parse(this.cleanJson(response.text));
   }
 
-  /**
-   * Converteert code met Gemini 3 Pro voor maximale nauwkeurigheid.
-   */
-  async convertFileWithSplitting(
-    file: ProjectFile, 
-    sourceLang: Language, 
-    targetLang: Language, 
-    autoSplit: boolean
-  ): Promise<Array<{ name: string; content: string; path: string }>> {
+  async convertFile(file: ProjectFile, from: string, to: string): Promise<Array<{ name: string; content: string; path: string }>> {
     const ai = this.getAI();
     
+    // Using gemini-2.0-pro-exp-02-05 for complex logic reasoning
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-preview',
-      contents: `Transpileer van ${sourceLang} naar ${targetLang}. Pad: ${file.path}\n\nCode:\n${file.content}`,
+      model: 'gemini-2.0-pro-exp-02-05',
+      contents: `Convert ${file.path} from ${from} to ${to}.\n\nCode:\n${file.content}`,
       config: {
-        systemInstruction: `Je bent een expert in codebase migraties.
-STRICTE REGELS:
-1. Converteer NOOIT configuratiebestanden (package.json, pom.xml, .env, etc.).
-2. Behoud frontend code als frontend. Converteer React componenten NOOIT naar Java/backend code.
-3. Bij conversie naar Spring Boot: Plaats backend in src/main/java en frontend in src/main/resources/static/.
-4. Behoud de mappenstructuur of pas deze aan volgens de conventies van de doeltaal.`,
+        systemInstruction: "You are a senior software architect. Convert code while preserving directory structure and architectural patterns. NEVER convert package managers or lockfiles.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -112,10 +73,8 @@ STRICTE REGELS:
       }
     });
 
-    const text = response.text;
-    if (!text) throw new Error(`Conversie mislukt voor: ${file.name}`);
-    const result = JSON.parse(this.cleanJsonResponse(text));
-    return result.files || [];
+    const result = JSON.parse(this.cleanJson(response.text));
+    return result.files;
   }
 }
 
