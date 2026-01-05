@@ -1,15 +1,18 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { ProjectFile, ProjectAnalysis, Language } from "../types";
 
 export class GeminiConversionService {
   private getAI() {
-    // Strictly adhering to the required environment variable 'API_KEY'
-    return new GoogleGenAI({ apiKey: process.env.API_KEY });
+    // Uses the API_KEY environment variable defined in your vite.config.ts
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) {
+      throw new Error("API Key not found. Please ensure GEMINI_API_KEY is set in your .env.local file.");
+    }
+    return new GoogleGenAI({ apiKey });
   }
 
   private cleanJsonResponse(text: string): string {
-    // Remove markdown code blocks if present
+    // Removes markdown code blocks (e.g., ```json ... ```) to ensure valid JSON parsing
     const jsonMatch = text.match(/```json\n([\s\S]*?)\n```/) || 
                       text.match(/```\n([\s\S]*?)\n```/) ||
                       [null, text];
@@ -29,8 +32,9 @@ export class GeminiConversionService {
         frameworks detected, and any ambiguous files. Suggest a logical target language for conversion.
       `;
 
+      // Updated to use the valid gemini-1.5-flash model
       const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-1.5-flash',
         contents: prompt,
         config: {
           responseMimeType: "application/json",
@@ -82,8 +86,9 @@ export class GeminiConversionService {
         ` : 'Maintain a 1:1 file mapping. If unresolved, mark with TODO comments.'}
       `;
 
+      // Updated to use the valid gemini-1.5-pro model for complex code logic
       const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-preview',
+        model: 'gemini-1.5-pro',
         contents: prompt,
         config: {
           systemInstruction: systemInstruction || "You are a world-class code migration tool. Preserve logic perfectly. Output results in a strictly valid JSON array of files.",

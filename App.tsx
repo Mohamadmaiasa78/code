@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { 
   Language, 
@@ -98,6 +97,10 @@ const App: React.FC = () => {
     setExpandedFolders(next);
   };
 
+  /**
+   * FIX: This function now filters out binary files and hidden directories 
+   * like .git to prevent garbled text glitches.
+   */
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
     if (!fileList) return;
@@ -105,15 +108,25 @@ const App: React.FC = () => {
     const loadedFiles: ProjectFile[] = [];
     const readers = Array.from(fileList).map((fileItem, index) => {
       const file = fileItem as File & { webkitRelativePath?: string };
+      const path = file.webkitRelativePath || file.name;
+
       return new Promise<void>((resolve) => {
-        const isAsset = /\.(png|jpg|jpeg|gif|svg|woff|woff2|ttf|eot|ico)$/i.test(file.name);
+        // FILTER: Ignore hidden system folders (.git, .vscode) and node_modules
+        if (path.includes('/.') || path.includes('node_modules/') || path.startsWith('.')) {
+          resolve();
+          return;
+        }
+
+        // FILTER: Detect binary assets vs source code
+        const isAsset = /\.(png|jpg|jpeg|gif|svg|woff|woff2|ttf|eot|ico|pdf|zip|exe|dll|bin|obj)$/i.test(file.name);
+        
         if (isAsset) {
           loadedFiles.push({
             id: `asset-${Date.now()}-${index}`,
             name: file.name,
-            path: file.webkitRelativePath || file.name,
+            path: path,
             content: '[Binary Asset - Preserved]',
-            outputFiles: [{ name: file.name, content: '[Binary Asset - Preserved]', path: file.webkitRelativePath || file.name }],
+            outputFiles: [{ name: file.name, content: '[Binary Asset - Preserved]', path: path }],
             status: 'completed',
             isAsset: true
           });
@@ -121,12 +134,13 @@ const App: React.FC = () => {
           return;
         }
 
+        // PROCESS: Only read actual text/code files
         const reader = new FileReader();
         reader.onload = (event) => {
           loadedFiles.push({
             id: `file-${Date.now()}-${index}`,
             name: file.name,
-            path: file.webkitRelativePath || file.name,
+            path: path,
             content: event.target?.result as string,
             outputFiles: [],
             status: 'idle'
@@ -511,7 +525,7 @@ const App: React.FC = () => {
             {analysis && <span>ROOT: {analysis.projectType}</span>}
           </div>
           <div className="text-[10px] text-[#5f6368] font-bold tracking-tighter">
-            GEMINI ENGINE V3 • HIERARCHICAL MAPPING ENABLED
+            GEMINI ENGINE V1.5 • HIERARCHICAL MAPPING ENABLED
           </div>
         </div>
       </main>
