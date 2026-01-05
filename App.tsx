@@ -71,6 +71,13 @@ const App: React.FC = () => {
   const currentFile = useMemo(() => files.find(f => f.id === selectedFileId), [files, selectedFileId]);
   const currentHistoryItem = useMemo(() => history.find(h => h.id === selectedHistoryId), [history, selectedHistoryId]);
 
+  // Helper om AI output te valideren tegen onze Language type
+  const sanitizeLanguage = (lang: string): Language => {
+    const validIds = LANGUAGES.map(l => l.id);
+    const normalized = lang.toLowerCase() as Language;
+    return validIds.includes(normalized) ? normalized : 'javascript';
+  };
+
   const fileTree = useMemo(() => {
     const root: FileTreeNode = { name: 'root', path: 'root', type: 'folder', children: {} };
     files.forEach(file => {
@@ -158,7 +165,9 @@ const App: React.FC = () => {
     try {
       const res = await conversionService.analyzeProject(loadedFiles);
       setAnalysis(res);
-      if (sourceLang === 'auto') setSourceLang(res.primaryLanguage as Language);
+      if (sourceLang === 'auto') {
+        setSourceLang(sanitizeLanguage(res.primaryLanguage));
+      }
     } catch (err: any) {
       setErrorMessage(err.message);
     } finally {
@@ -180,7 +189,7 @@ const App: React.FC = () => {
     const zip = new JSZip();
     const newHistoryItems: ConversionHistoryItem[] = [];
 
-    const effectiveSourceLang = sourceLang === 'auto' ? (analysis?.primaryLanguage as Language || 'javascript') : sourceLang;
+    const effectiveSourceLang = sourceLang === 'auto' ? sanitizeLanguage(analysis?.primaryLanguage || 'javascript') : sourceLang;
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -340,14 +349,14 @@ const App: React.FC = () => {
             <label className="block text-[10px] font-bold text-[#9aa0a6] uppercase tracking-widest">Pipeline</label>
             <div className="space-y-2">
               <span className="text-xs text-[#9aa0a6]">Bron</span>
-              <select value={sourceLang} onChange={(e) => setSourceLang(e.target.value as any)} className="w-full bg-[#0f1011] border border-[#3c4043] rounded-lg p-2 text-sm">
+              <select value={sourceLang} onChange={(e) => setSourceLang(sanitizeLanguage(e.target.value))} className="w-full bg-[#0f1011] border border-[#3c4043] rounded-lg p-2 text-sm">
                 <option value="auto">Auto-detect</option>
                 {LANGUAGES.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
               </select>
             </div>
             <div className="space-y-2">
               <span className="text-xs text-[#9aa0a6]">Doel</span>
-              <select value={targetLang} onChange={(e) => setTargetLang(e.target.value as Language)} className="w-full bg-[#0f1011] border border-[#3c4043] rounded-lg p-2 text-sm">
+              <select value={targetLang} onChange={(e) => setTargetLang(sanitizeLanguage(e.target.value))} className="w-full bg-[#0f1011] border border-[#3c4043] rounded-lg p-2 text-sm">
                 {LANGUAGES.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
               </select>
             </div>

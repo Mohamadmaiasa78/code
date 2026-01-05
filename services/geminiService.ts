@@ -14,7 +14,7 @@ export class GeminiConversionService {
       throw new Error(
         "CONFIGURATIEFOUT: De Gemini API-sleutel (process.env.API_KEY) is niet gevonden. " +
         "Zorg ervoor dat GEMINI_API_KEY aanwezig is in je .env.local bestand en dat deze " +
-        "door je build-configuratie wordt doorgegeven als process.env.API_KEY."
+        "door vite.config.ts wordt doorgegeven als process.env.API_KEY."
       );
     }
     
@@ -47,7 +47,7 @@ export class GeminiConversionService {
     
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: `Analyseer de volgende projectstructuur: ${JSON.stringify(fileManifest)}. Bepaal het projecttype en de primaire taal.`,
+      contents: `Analyseer de volgende projectstructuur: ${JSON.stringify(fileManifest)}. Bepaal het projecttype en de primaire programmeertaal.`,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
